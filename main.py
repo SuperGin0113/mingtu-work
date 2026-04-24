@@ -25,7 +25,8 @@ from dotenv import load_dotenv
 load_dotenv()
 from fastapi import FastAPI
 
-from chunk_pipeline import get_embed, log
+from utils.embedding import get_embed
+from utils.logging import log
 from retrieval_router import init_collection
 from retrieval_router import router as retrieval_router
 

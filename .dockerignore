@@ -16,3 +16,7 @@ data/
 *.json
 README.md
 *.log
+
+# 运行期不需要的离线数据管线
+chunk/
+script/

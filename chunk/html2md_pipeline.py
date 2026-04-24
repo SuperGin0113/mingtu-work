@@ -6,12 +6,12 @@ Westlaw HTML 两阶段处理管线。
   DB —— 读 doc_items.doc_html，写回 doc_html_clean / doc_md_clean
 
 CLI:
-    python html2md_pipeline.py                      # 文件系统全阶段
-    python html2md_pipeline.py --mode clean         # 文件系统仅清洗
-    python html2md_pipeline.py --mode md            # 文件系统仅 Markdown
-    python html2md_pipeline.py --mode db-row --id 42
-    python html2md_pipeline.py --mode db-batch              # 跑 clean_process_status IN (0, 3)
-    python html2md_pipeline.py --mode db-batch --force      # 全量重跑
+    python -m chunk.html2md_pipeline                      # 文件系统全阶段
+    python -m chunk.html2md_pipeline --mode clean         # 文件系统仅清洗
+    python -m chunk.html2md_pipeline --mode md            # 文件系统仅 Markdown
+    python -m chunk.html2md_pipeline --mode db-row --id 42
+    python -m chunk.html2md_pipeline --mode db-batch              # 跑 clean_process_status IN (0, 3)
+    python -m chunk.html2md_pipeline --mode db-batch --force      # 全量重跑
 """
 
 from __future__ import annotations
@@ -663,7 +663,7 @@ def _resolve_cli_path(path_value: str) -> Path:
 def _db_connect():
     """懒加载：只有在 DB 模式下才 import psycopg2，避免文件系统模式的硬依赖。"""
     import psycopg2  # noqa: PLC0415
-    from db import DB_CONFIG, DB_NAME  # noqa: PLC0415
+    from script.db import DB_CONFIG, DB_NAME  # noqa: PLC0415
 
     return psycopg2.connect(dbname=DB_NAME, **DB_CONFIG)
 

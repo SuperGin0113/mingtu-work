@@ -4,15 +4,15 @@
 ## 目录
 
 ```text
-├── main.py                  # FastAPI 入口
-├── retrieval_router.py      # /retrieve /health
-├── retrieval_pipeline.py    # Milvus 向量 + BM25 融合
-├── chunk_pipelineV2.py      # 切块 + embedding 写入 Milvus
-├── chunk_pipeline.py        # embedding / splitter 工具
-├── html2md_pipeline.py      # HTML → Markdown
-├── milvus_db.py             # Milvus 集合初始化
-├── db.py                    # 历史 pgsql(仅 chunk/html2md 链路使用)
-└── script/                  # 抓取、下载、导出脚本
+├── main.py                        # FastAPI 入口
+├── retrieval_router.py            # /retrieve /health
+├── retrieval_pipeline.py          # Milvus 向量 + BM25 融合
+├── chunk/
+│   ├── chunk_pipelineV2.py        # 切块 + embedding 写入 Milvus
+│   ├── chunk_pipeline.py          # pgsql 版切块 pipeline
+│   └── html2md_pipeline.py        # HTML → Markdown
+├── milvus_db.py                   # Milvus 集合初始化
+└── script/                        # 抓取、下载、导出脚本（含 pgsql db.py）
 ```
 
 ## 常用命令
@@ -22,7 +22,7 @@
 python milvus_db.py --init
 
 # 切块 + 入库
-python chunk_pipelineV2.py --batch
+python -m chunk.chunk_pipelineV2 --batch
 
 # 启动检索服务
 python main.py

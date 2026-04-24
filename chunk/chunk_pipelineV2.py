@@ -18,17 +18,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from chunk_pipeline import (
-    active_embed_name,
-    get_embed,
-    get_splitter,
-    log,
-    split_parents,
-    tok_len,
-)
 from milvus_db import DEFAULT_COLLECTION, get_client, init_collection
+from utils.chunking import get_splitter, split_parents, tok_len
+from utils.embedding import active_embed_name, get_embed
+from utils.logging import log
 
-DEFAULT_JSON = os.environ.get("DOC_JSON", "doc_items_202604231612.json")
+DEFAULT_JSON = os.environ.get("DOC_JSON")
 CONTENT_MAX = 65_535
 
 

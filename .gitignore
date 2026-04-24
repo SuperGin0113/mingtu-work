@@ -7,7 +7,9 @@ tmp/storage_state.json
 __pycache__/
 *.pyc
 
+# 本地 conda 环境
+.conda/
+
 # 数据与日志
 data/
 tmp/
-script/

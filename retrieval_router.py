@@ -17,9 +17,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from pymilvus import Collection, utility
 
-from chunk_pipeline import UpstreamServiceError
 from milvus_db import ALIAS, DEFAULT_COLLECTION, connect as milvus_connect
 from retrieval_pipeline import RetrievalConfig, retrieve
+from utils.errors import UpstreamServiceError
 
 PARENT_CONTENT_PREVIEW = 1000
 

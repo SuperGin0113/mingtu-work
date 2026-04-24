@@ -24,9 +24,10 @@ import numpy as np
 from pydantic import BaseModel, Field
 from pymilvus import Collection
 
-import chunk_pipeline
-from chunk_pipeline import UpstreamServiceError, get_embed, log
 from milvus_db import ALIAS, DEFAULT_COLLECTION, connect as milvus_connect
+from utils.embedding import active_embed_name, get_embed
+from utils.errors import UpstreamServiceError
+from utils.logging import log
 
 CANDIDATE_MULTIPLIER = 1
 DEFAULT_TOP_K = 30
@@ -357,7 +358,7 @@ def main():
         payload = {
             "query": args.query,
             "collection": args.collection,
-            "model_name": chunk_pipeline.active_embed_name(),
+            "model_name": active_embed_name(),
             "score_type": score_type,
             "retrieval_config": config.model_dump(),
             "results": results,
