@@ -1,0 +1,13 @@
+# 敏感配置
+.env
+tmp/cookies.json
+tmp/storage_state.json
+
+# Python
+__pycache__/
+*.pyc
+
+# 数据与日志
+data/
+tmp/
+script/

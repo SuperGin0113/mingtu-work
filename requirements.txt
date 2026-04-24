@@ -1,0 +1,14 @@
+beautifulsoup4==4.14.3
+bm25s==0.3.4
+fastapi==0.136.0
+llama_index==0.14.21
+markdownify==1.2.2
+nltk==3.9.4
+numpy==2.4.4
+psycopg2_binary==2.9.11
+pymilvus==2.6.12
+pydantic==2.13.3
+python-dotenv==1.2.2
+Requests==2.33.1
+transformers==5.5.4
+uvicorn==0.45.0
