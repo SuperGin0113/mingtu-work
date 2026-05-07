@@ -189,6 +189,13 @@ def main() -> None:
         try:
             rows, status = build_rows(item)
             if rows:
+                doc_guid = rows[0]["doc_guid"]
+                if doc_guid:
+                    deleted = client.delete(
+                        collection_name=args.collection,
+                        filter=f'doc_guid == "{doc_guid}"',
+                    )
+                    log(f"[purge] doc_guid={doc_guid} removed={deleted}")
                 client.insert(collection_name=args.collection, data=rows)
                 ok += 1
                 log(f"[done] source_doc_id={source_doc_id} {status}")

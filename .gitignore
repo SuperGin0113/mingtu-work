@@ -1,5 +1,6 @@
 # 敏感配置
 .env
+.venv
 tmp/cookies.json
 tmp/storage_state.json
 
@@ -13,3 +14,5 @@ __pycache__/
 # 数据与日志
 data/
 tmp/
+.venv/
+evaluation/reports
