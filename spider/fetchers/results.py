@@ -17,18 +17,14 @@ import time
 from pathlib import Path
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from curl_cffi import requests as cffi_requests
 from playwright.sync_api import sync_playwright
 
-from script.sc import (
-    COOKIE_FILE,
-    COOKIE_TTL,
-    DATA_DIR,
-    STORAGE_FILE,
-    get_authenticated_context,
-)
+from script.project_paths import DATA_DIR
+from spider.login.browser_login import COOKIE_TTL, get_authenticated_context
+from spider.paths import COOKIE_FILE, STORAGE_FILE
 
 
 

@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 import psycopg2
 from curl_cffi import requests as cffi_requests
@@ -28,7 +28,8 @@ from playwright.sync_api import sync_playwright
 
 from script.db import DB_CONFIG, DB_NAME
 from script.project_paths import DATA_DIR
-from script.sc import COOKIE_FILE, COOKIE_TTL, STORAGE_FILE, get_authenticated_context
+from spider.login.browser_login import COOKIE_TTL, get_authenticated_context
+from spider.paths import COOKIE_FILE, STORAGE_FILE
 
 # 日志配置：终端 + 文件同时输出
 LOG_DIR = DATA_DIR

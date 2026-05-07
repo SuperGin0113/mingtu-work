@@ -16,12 +16,13 @@ import time
 from pathlib import Path
 
 if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
-from script.project_paths import COOKIE_FILE, DATA_DIR, ENV_FILE, ROOT_DIR, STORAGE_FILE
+from script.project_paths import DATA_DIR, ENV_FILE, ROOT_DIR
+from spider.paths import COOKIE_FILE, STORAGE_FILE
 
 BASE_DIR = ROOT_DIR
 load_dotenv(ENV_FILE)
