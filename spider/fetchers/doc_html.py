@@ -1,7 +1,7 @@
 """
 从 doc_items 表取 is_primary 待处理记录，用缓存的 cookie 下载 docUrl 对应的 HTML，写入 doc_html 字段。
 状态机：0 待处理 -> 1 处理中 -> 2 成功 / 3 可重试 / 4 不可重试
-
+# 原有旧逻辑，暂保留
 架构：
 - 启动时打开 playwright 浏览器并保持，用于登录刷新 cookie 和处理人机验证
 - 数据请求用 curl_cffi（更快、更轻量）

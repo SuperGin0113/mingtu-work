@@ -20,6 +20,7 @@ if __package__ in {None, ""}:
 
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
+from playwright_stealth import Stealth
 
 from script.project_paths import DATA_DIR, ENV_FILE, ROOT_DIR
 from spider.paths import COOKIE_FILE, STORAGE_FILE
@@ -92,25 +93,86 @@ def save_storage_state(context):
 
 
 # ========== 登录状态检测 ==========
-def is_logged_in(page) -> bool:
+def _settle_dom(page, max_wait: float = 8.0) -> None:
+    """轻量等待页面稳定：等 DOM 加载完成，再做一次短的 networkidle 尝试（容错）。
+
+    Westlaw 上常驻分析/长连接，networkidle 经常永不达成；不要把它当硬阻塞。
     """
-    判断当前是否已登录。
-    策略：访问首页后若 URL 仍在 westlaw 域名且未被重定向到 signon，则认为已登录。
-    同时检查页面是否出现登录表单字段。
-    """
-    current_url = page.url.lower()
-    if "signon" in current_url or "signin" in current_url or "login" in current_url:
-        return False
-    if "westlaw.com" not in current_url:
-        return False
-    # 检查页面是否存在用户名输入框（未登录才会出现）
     try:
-        has_username_input = page.locator("#Username, input[name='Username']").count() > 0
-        if has_username_input:
-            return False
+        page.wait_for_load_state("domcontentloaded", timeout=int(max_wait * 1000))
     except Exception:
         pass
-    return True
+    try:
+        page.wait_for_load_state("networkidle", timeout=2_000)
+    except Exception:
+        pass
+
+
+def _wait_for_url_settled(page, timeout: float = 30.0, stable_seconds: float = 1.5) -> str:
+    """轮询 page.url，直到 URL 在 stable_seconds 内不变 或 超时。返回最终 URL。"""
+    deadline = time.time() + timeout
+    last_url = page.url
+    last_change = time.time()
+    while time.time() < deadline:
+        cur = page.url
+        if cur != last_url:
+            last_url = cur
+            last_change = time.time()
+        elif time.time() - last_change >= stable_seconds:
+            break
+        time.sleep(0.25)
+    return page.url
+
+
+def _has_signon_form(page) -> bool:
+    try:
+        return page.locator("#Username, input[name='Username']").count() > 0
+    except Exception:
+        return False
+
+
+def _has_client_id_page(page) -> bool:
+    """Welcome, XXX / Client ID 输入框 / Continue 这种过渡页（lightbox 弹窗）。
+
+    必须 element 存在 **且可见**——Continue 被点掉后 lightbox 关闭，元素仍在 DOM
+    里只是隐藏，那时不能再判定为 client_id 页。
+    """
+    candidates = (
+        "#co_clientIDContinueButton",
+        "#co_clientIDTextbox",
+        "input[name='clientIdTextbox']",
+        "select[name='ClientID']",
+        "select#ClientID",
+        "input[name='ClientID']",
+        "input#ClientID",
+    )
+    for sel in candidates:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _classify_page(page) -> str:
+    """返回 'signon' | 'client_id' | 'logged_in' | 'unknown'"""
+    url = (page.url or "").lower()
+    if "signon" in url or "signin" in url or "/login" in url:
+        return "signon"
+    if _has_signon_form(page):
+        return "signon"
+    if "westlaw.com" not in url:
+        return "unknown"
+    if _has_client_id_page(page):
+        return "client_id"
+    return "logged_in"
+
+
+def is_logged_in(page) -> bool:
+    """已登录 = 处于 westlaw 域且非 signon 页、非 Client ID 过渡页。"""
+    return _classify_page(page) == "logged_in"
 
 
 # ========== 登录流程 ==========
@@ -118,9 +180,7 @@ def do_login(page):
     """执行 Westlaw 登录流程"""
     print("[login] 打开登录页...")
     page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
-
-    # 若未登录会被重定向到 signon.thomsonreuters.com
-    page.wait_for_load_state("networkidle", timeout=60_000)
+    _settle_dom(page)
 
     # 1) 输入用户名
     print("[login] 填写用户名...")
@@ -138,7 +198,7 @@ def do_login(page):
         ).first
         if next_btn.count() > 0:
             next_btn.click()
-            page.wait_for_load_state("networkidle", timeout=30_000)
+            _settle_dom(page)
         password_input = page.locator("#Password, input[name='Password']").first
         password_input.wait_for(state="visible", timeout=30_000)
 
@@ -154,19 +214,24 @@ def do_login(page):
     submit_btn.click()
     print("[login] 已提交登录表单，等待跳转...")
 
-    # 4) 等待回到 westlaw 主域
-    try:
-        page.wait_for_url("**/westlaw.com/**", timeout=60_000)
-    except PlaywrightTimeoutError:
-        print("[login] 等待跳转超时，继续尝试...")
-
-    page.wait_for_load_state("networkidle", timeout=60_000)
+    # 4) 轮询等待跳转出 signon 域（不依赖 networkidle）
+    deadline = time.time() + 90.0
+    while time.time() < deadline:
+        url_l = (page.url or "").lower()
+        if "westlaw.com" in url_l and "signon" not in url_l and "signin" not in url_l:
+            break
+        time.sleep(0.5)
+    _settle_dom(page)
+    final_url = _wait_for_url_settled(page, timeout=15.0)
+    print(f"[login] 跳转后 URL: {final_url[:160]}")
 
     # Client ID 确认页（Welcome, XXX + Client ID 下拉 + Continue）
-    handle_client_id_page(page)
+    if _has_client_id_page(page):
+        handle_client_id_page(page)
+        _settle_dom(page)
 
     if not is_logged_in(page):
-        raise RuntimeError("登录失败：未能跳转到已登录状态的 Westlaw 页面")
+        raise RuntimeError(f"登录失败：未能跳转到已登录状态的 Westlaw 页面 (url={page.url[:160]})")
     print("[login] 登录成功")
 
 
@@ -211,21 +276,96 @@ def handle_client_id_page(page):
             )
             print(f"[client-id] 已保存 {len(recent_items)} 条 recent research -> {RECENT_RESEARCH_FILE}")
 
-        # 点击 Continue
-        if continue_btn.count() > 0 and continue_btn.is_visible():
-            print("[client-id] 点击 Continue...")
-            with page.expect_navigation(wait_until="networkidle", timeout=60_000):
-                continue_btn.click()
-        else:
-            # 兜底：提交所在 form
-            page.evaluate(
-                "() => { const f = document.querySelector('form'); if (f) f.submit(); }"
-            )
-            page.wait_for_load_state("networkidle", timeout=60_000)
+        # 0) 先把可能挡住按钮的 OneTrust cookie 弹窗点掉（如有）
+        _dismiss_consent_banners(page)
 
-        print(f"[client-id] Continue 后 URL: {page.url}")
+        # 1) 确保 Client ID 输入框有值（页面通常预填，没填则 fallback 用 USERNAME 当作 client）
+        try:
+            cid_input = page.locator("#co_clientIDTextbox, input[name='clientIdTextbox']").first
+            if cid_input.count() > 0:
+                cur_val = cid_input.input_value() or ""
+                if not cur_val.strip():
+                    fallback = os.getenv("WESTLAW_CLIENT_ID") or USERNAME
+                    print(f"[client-id] 输入框为空，填入 fallback: {fallback!r}")
+                    cid_input.fill(fallback)
+        except Exception as e:
+            print(f"[client-id] 处理输入框异常: {e}")
+
+        # 2) 点击 Continue。Continue 是 JS 绑定的 input[type=button]，不一定触发 navigation。
+        before_url = page.url
+        clicked = False
+        if continue_btn.count() > 0:
+            try:
+                continue_btn.scroll_into_view_if_needed(timeout=3_000)
+            except Exception:
+                pass
+            try:
+                print("[client-id] 点击 Continue (Playwright click)...")
+                continue_btn.click(timeout=10_000, force=True)
+                clicked = True
+            except Exception as e:
+                print(f"[client-id] click 失败: {e}; 尝试 JS 触发")
+
+        if not clicked:
+            try:
+                ok = page.evaluate(
+                    "() => { const b = document.getElementById('co_clientIDContinueButton'); "
+                    "if (!b) return false; b.click(); return true; }"
+                )
+                print(f"[client-id] JS 触发 Continue: {ok}")
+            except Exception as e:
+                print(f"[client-id] JS 触发失败: {e}")
+
+        # 3) 等待页面真正离开 Client ID 状态：
+        #    URL 改变 OR Continue 按钮消失 OR firstPage=true 从 URL 中消失
+        deadline = time.time() + 30.0
+        while time.time() < deadline:
+            now_url = page.url
+            url_changed = now_url != before_url
+            no_first_page = "firstpage=true" not in now_url.lower()
+            try:
+                btn_visible = continue_btn.is_visible()
+            except Exception:
+                btn_visible = False
+            if (url_changed and no_first_page) or not btn_visible:
+                break
+            time.sleep(0.5)
+        else:
+            # 30s 还没动 → 再用 JS 触发一次试试
+            try:
+                page.evaluate(
+                    "() => { const b = document.getElementById('co_clientIDContinueButton'); "
+                    "if (b) b.click(); }"
+                )
+            except Exception:
+                pass
+            time.sleep(3)
+
+        _wait_for_url_settled(page, timeout=15.0)
+        _settle_dom(page)
+        print(f"[client-id] Continue 后 URL: {page.url[:160]}")
     except Exception as e:
         print(f"[client-id] 处理异常: {e}")
+
+
+def _dismiss_consent_banners(page) -> None:
+    """OneTrust / 其他 cookie 弹窗会盖住 Continue 按钮，先点掉。"""
+    selectors = (
+        "#onetrust-accept-btn-handler",
+        "button#accept-recommended-btn-handler",
+        "button.onetrust-close-btn-handler",
+        "#onetrust-pc-btn-handler",  # 可能是 Settings; 一般不点
+    )
+    for sel in selectors[:3]:
+        try:
+            loc = page.locator(sel).first
+            if loc.count() > 0 and loc.is_visible():
+                loc.click(timeout=2_000)
+                print(f"[client-id] 已点掉 cookie banner: {sel}")
+                time.sleep(0.5)
+                return
+        except Exception:
+            continue
 
 
 def extract_recent_research(page):
@@ -310,23 +450,45 @@ def get_authenticated_context(playwright):
         user_agent=USER_AGENT,
         viewport={"width": 1440, "height": 900},
     )
+    # 反检测:对 context 应用 playwright-stealth 的 evasion 脚本
+    # (navigator.webdriver / chrome.runtime / canvas / WebGL 等),帮助过 Cloudflare BM。
+    Stealth().apply_stealth_sync(context)
+
     # 挂载响应日志
     attach_response_logger(context)
 
     page = context.new_page()
 
-    # 先尝试用缓存访问
-    print(f"[nav] 访问首页: {HOME_URL}")
-    page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
-    try:
-        page.wait_for_load_state("networkidle", timeout=30_000)
-    except PlaywrightTimeoutError:
-        pass
+    used_cache = False
+    if storage:
+        # 优先尝试缓存：访问首页，看落地是 signon / Client ID / 已登录
+        print(f"[nav] 访问首页 (使用缓存): {HOME_URL}")
+        try:
+            page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60_000)
+        except PlaywrightTimeoutError:
+            print("[nav] 首页 domcontentloaded 超时，继续按当前 URL 判断")
+        _settle_dom(page)
+        _wait_for_url_settled(page, timeout=15.0)
 
-    if is_logged_in(page):
-        print("[status] 已使用缓存 Cookie 登录")
-    else:
-        print("[status] 未登录，执行登录流程...")
+        kind = _classify_page(page)
+        print(f"[status] 缓存落地页类型: {kind} (url={page.url[:160]})")
+
+        if kind == "client_id":
+            # 这只是登录后的过渡页，点 Continue 即可，不用重登
+            handle_client_id_page(page)
+            _settle_dom(page)
+            kind = _classify_page(page)
+            print(f"[status] Continue 后类型: {kind}")
+
+        if kind == "logged_in":
+            print("[status] ✓ 缓存有效，跳过登录")
+            used_cache = True
+        else:
+            print(f"[status] ✗ 缓存不可用 (kind={kind})，执行登录流程...")
+
+    if not used_cache:
+        if not storage:
+            print("[status] 无缓存，执行登录流程...")
         do_login(page)
         save_storage_state(context)
 
@@ -338,6 +500,29 @@ def get_authenticated_context(playwright):
         print(f"[home] 保存首页 HTML 失败: {e}")
 
     return browser, context, page
+
+
+def browser_login_once() -> int:
+    """启动 chromium → 跑完登录（或仅校验缓存） → 保存 cookies → 关闭浏览器。
+
+    供 ensure_logged_in() 在 HTTP 登录失败时 fallback 使用。
+    返回写入的 cookie 数量。
+    """
+    with sync_playwright() as p:
+        browser, context, _page = get_authenticated_context(p)
+        try:
+            save_storage_state(context)
+            cookies = context.cookies()
+            return len(cookies)
+        finally:
+            try:
+                context.close()
+            except Exception:
+                pass
+            try:
+                browser.close()
+            except Exception:
+                pass
 
 
 def main():
