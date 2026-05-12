@@ -657,15 +657,38 @@ def _resolve_cli_path(path_value: str) -> Path:
 
 
 # ══════════════════════════════════════════════════════════════════
-# DB 模式：从 doc_items 读 doc_html，写 doc_html_clean / doc_md_clean
+# DB 模式：从 MongoDB doc_items 读 doc_html，写 doc_html_clean / doc_md_clean
+#
+# 在 doc_items 文档上新增 / 维护的字段：
+#   doc_html_clean             清洗后的离线可读 HTML 页面
+#   doc_md_clean               转换后的 Markdown 文本
+#   doc_md_clean_len           MD 字节长度
+#   clean_process_status       null/0=待处理，2=成功，3=失败
+#   clean_process_fail_reason  失败原因（截断 500 字）
+#   clean_process_updated_at   最近一次清洗写入时间（UTC）
 # ══════════════════════════════════════════════════════════════════
 
-def _db_connect():
-    """懒加载：只有在 DB 模式下才 import psycopg2，避免文件系统模式的硬依赖。"""
-    import psycopg2  # noqa: PLC0415
-    from script.db import DB_CONFIG, DB_NAME  # noqa: PLC0415
+from datetime import datetime, timezone
 
-    return psycopg2.connect(dbname=DB_NAME, **DB_CONFIG)
+
+def _db_collection():
+    """懒加载：只有在 DB 模式下才 import pymongo / script.db。"""
+    from script.db import get_doc_items_collection  # noqa: PLC0415
+    return get_doc_items_collection()
+
+
+def _resolve_key(key: str):
+    """--id 接受 ObjectId 十六进制。"""
+    from bson import ObjectId  # noqa: PLC0415
+    from bson.errors import InvalidId  # noqa: PLC0415
+    try:
+        return {"_id": ObjectId(key)}
+    except (InvalidId, TypeError):
+        raise SystemExit(f"无效的 ObjectId 字符串：{key!r}")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 def _process_html_to_outputs(html: str, doc_key: str) -> tuple[str, str]:
@@ -675,83 +698,93 @@ def _process_html_to_outputs(html: str, doc_key: str) -> tuple[str, str]:
     return clean_page, md_text
 
 
-def process_row(conn, row_id: int) -> bool:
-    """处理单行。成功返回 True，失败返回 False 并写 clean_process_fail_reason。"""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT id, doc_html, title FROM doc_items WHERE id = %s",
-            (row_id,),
+def process_doc(col, query: dict) -> bool:
+    """处理 query 匹配到的单条文档。成功返回 True，否则 False。"""
+    doc = col.find_one(query, {"_id": 1, "doc_html": 1, "title": 1, "docGuid": 1})
+    if doc is None:
+        print(f"[跳过] {query} 不存在")
+        return False
+
+    _id = doc["_id"]
+    doc_html = doc.get("doc_html")
+    label = doc.get("docGuid") or str(_id)
+    if not doc_html:
+        col.update_one(
+            {"_id": _id},
+            {"$set": {
+                "clean_process_status": 3,
+                "clean_process_fail_reason": "doc_html is empty",
+                "clean_process_updated_at": _utc_now(),
+            }},
         )
-        row = cur.fetchone()
-        if row is None:
-            print(f"[跳过] id={row_id} 不存在")
-            return False
+        print(f"[失败] {label} doc_html 为空")
+        return False
 
-        _id, doc_html, title = row
-        if not doc_html:
-            cur.execute(
-                """UPDATE doc_items SET clean_process_status = 3,
-                                        clean_process_fail_reason = 'doc_html is empty'
-                   WHERE id = %s""",
-                (row_id,),
-            )
-            conn.commit()
-            print(f"[失败] id={row_id} doc_html 为空")
-            return False
-
-        try:
-            clean_html, md_text = _process_html_to_outputs(
-                doc_html, doc_key=title or f"id_{row_id}"
-            )
-        except Exception as err:
-            cur.execute(
-                """UPDATE doc_items SET clean_process_status = 3,
-                                        clean_process_fail_reason = %s
-                   WHERE id = %s""",
-                (f"{type(err).__name__}: {err}"[:500], row_id),
-            )
-            conn.commit()
-            print(f"[失败] id={row_id} {type(err).__name__}: {err}")
-            return False
-
-        cur.execute(
-            """UPDATE doc_items SET
-                   doc_html_clean = %s,
-                   doc_md_clean = %s,
-                   doc_md_clean_len = %s,
-                   clean_process_status = 2,
-                   clean_process_fail_reason = NULL
-               WHERE id = %s""",
-            (clean_html, md_text, len(md_text), row_id),
+    try:
+        clean_html, md_text = _process_html_to_outputs(
+            doc_html, doc_key=doc.get("title") or label
         )
-        conn.commit()
-        print(f"[OK  ] id={row_id} md={len(md_text)}")
-        return True
+    except Exception as err:  # noqa: BLE001
+        col.update_one(
+            {"_id": _id},
+            {"$set": {
+                "clean_process_status": 3,
+                "clean_process_fail_reason": f"{type(err).__name__}: {err}"[:500],
+                "clean_process_updated_at": _utc_now(),
+            }},
+        )
+        print(f"[失败] {label} {type(err).__name__}: {err}")
+        return False
+
+    col.update_one(
+        {"_id": _id},
+        {
+            "$set": {
+                "doc_html_clean": clean_html,
+                "doc_md_clean": md_text,
+                "doc_md_clean_len": len(md_text),
+                "clean_process_status": 2,
+                "clean_process_updated_at": _utc_now(),
+            },
+            "$unset": {"clean_process_fail_reason": ""},
+        },
+    )
+    print(f"[OK  ] {label} md={len(md_text)}")
+    return True
 
 
-def process_batch(conn, force: bool = False) -> tuple[int, int]:
-    """扫描待处理行。返回 (成功数, 失败数)。
+def process_batch(col, force: bool = False, limit: int | None = None) -> tuple[int, int]:
+    """批量扫描。返回 (成功数, 失败数)。
 
-    force=False：仅处理 clean_process_status IN (0, 3) 的行
-    force=True ：重跑所有 doc_html 非空的行
+    force=False：只挑 clean_process_status IN (null, 0, 3) 的文档
+    force=True ：所有 doc_html 非空文档都重跑
+    limit      ：上限，None=全部
     """
-    where = "doc_html IS NOT NULL"
+    base = {"doc_html": {"$ne": None, "$exists": True}}
     if not force:
-        where += " AND (clean_process_status IS NULL OR clean_process_status IN (0, 3))"
+        base["$or"] = [
+            {"clean_process_status": {"$exists": False}},
+            {"clean_process_status": {"$in": [None, 0, 3]}},
+        ]
 
-    with conn.cursor() as cur:
-        cur.execute(f"SELECT id FROM doc_items WHERE {where} ORDER BY id")
-        ids = [r[0] for r in cur.fetchall()]
+    cursor = col.find(base, {"_id": 1}).sort("_id", 1)
+    if limit is not None:
+        cursor = cursor.limit(limit)
+    ids = [d["_id"] for d in cursor]
 
-    print(f"[批次] 待处理 {len(ids)} 行（force={force}）")
+    print(f"[批次] 待处理 {len(ids)} 条（force={force}, limit={limit}）")
     ok = fail = 0
-    for row_id in ids:
-        if process_row(conn, row_id):
+    for _id in ids:
+        if process_doc(col, {"_id": _id}):
             ok += 1
         else:
             fail += 1
     print(f"[批次] 完成：成功 {ok} / 失败 {fail}")
     return ok, fail
+
+
+def ensure_indexes(col) -> None:
+    col.create_index("clean_process_status")
 
 
 def main() -> None:
@@ -763,7 +796,7 @@ def main() -> None:
         "--mode",
         choices=("all", "clean", "md", "db-row", "db-batch"),
         default="all",
-        help="all/clean/md 走文件系统；db-row/db-batch 读写 doc_items",
+        help="all/clean/md 走文件系统；db-row/db-batch 读写 MongoDB doc_items",
     )
     # 文件系统模式参数
     parser.add_argument("--src", default=str(RAW_HTML_DIR), help="Raw HTML directory (fs mode)")
@@ -774,22 +807,27 @@ def main() -> None:
     parser.add_argument("--use-local-images", action="store_true",
                         help="Replace Westlaw image URLs with local files (fs mode)")
     # DB 模式参数
-    parser.add_argument("--id", type=int, help="Row id (db-row mode)")
+    parser.add_argument("--id", help="ObjectId 十六进制 (db-row mode)")
+    parser.add_argument("--guid", help="docGuid 业务键 (db-row mode)")
+    parser.add_argument("--limit", type=int,
+                        help="db-batch 最多处理多少条（默认全部）")
     parser.add_argument("--force", action="store_true",
-                        help="Reprocess rows regardless of clean_process_status (db-batch mode)")
+                        help="重跑（忽略 clean_process_status）")
     args = parser.parse_args()
 
     if args.mode in ("db-row", "db-batch"):
-        conn = _db_connect()
-        try:
-            if args.mode == "db-row":
-                if args.id is None:
-                    raise SystemExit("--mode db-row 必须指定 --id")
-                process_row(conn, args.id)
+        col = _db_collection()
+        ensure_indexes(col)
+        if args.mode == "db-row":
+            if args.id:
+                query = _resolve_key(args.id)
+            elif args.guid:
+                query = {"docGuid": args.guid}
             else:
-                process_batch(conn, force=args.force)
-        finally:
-            conn.close()
+                raise SystemExit("--mode db-row 必须指定 --id 或 --guid")
+            process_doc(col, query)
+        else:
+            process_batch(col, force=args.force, limit=args.limit)
         return
 
     run_pipeline(
