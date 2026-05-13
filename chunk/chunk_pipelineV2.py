@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime, timezone
 import os
+import re
 import time
 import traceback
 
@@ -25,6 +26,39 @@ from utils.logging import log
 
 DEFAULT_JSON = os.environ.get("DOC_JSON")
 CONTENT_MAX = 65_535
+
+
+# 缩写点保护:切前把已知缩写里的 "." 临时换成 sentinel,避免 NLTK Punkt 把
+# Mr. / v. / J.K. / U.S.C.A. / 3.14 当真句尾切散。切完再 restore。
+# hide/restore 是 1:1 字符替换不变长,_child_spans 在 body 里 find 仍然有效。
+_DOT_SENTINEL = ""  # Unicode 私有使用区,Punkt / sentencepiece 都不当句点
+
+_ABBREV_PROTECT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|Rev|Hon|Inc|Ltd|Co|Corp|No|Vol|Art|Sec|"
+        r"etc|cf|al|Fig|Eq)\."
+    ),
+    re.compile(r"\b(?:e\.g|i\.e|U\.S|U\.K|U\.S\.A)\."),
+    # 连写首字母缩写:J.K. / U.S. / U.S.C.A. 里所有的点都隐
+    re.compile(r"\b(?:[A-Z]\.){2,}"),
+    # 原告 v. 被告 / vs.
+    re.compile(r"\b[vV]s?\."),
+    # 小数 3.14 / 多级编号 1.2 / 1.2.3
+    re.compile(r"\d+(?:\.\d+)+"),
+)
+
+
+def _hide_dots(text: str) -> str:
+    def _sub(m: re.Match[str]) -> str:
+        return m.group(0).replace(".", _DOT_SENTINEL)
+
+    for pat in _ABBREV_PROTECT_PATTERNS:
+        text = pat.sub(_sub, text)
+    return text
+
+
+def _restore_dots(text: str) -> str:
+    return text.replace(_DOT_SENTINEL, ".")
 
 
 def _truncate(s: str | None, n: int) -> str:
@@ -98,7 +132,12 @@ def build_rows(item: dict) -> tuple[list[dict], str]:
     splitter = get_splitter()
     plan = []
     for section in sections:
-        children = [c for c in splitter.split_text(section["body"]) if c.strip()]
+        hidden_body = _hide_dots(section["body"])
+        children = [
+            _restore_dots(c)
+            for c in splitter.split_text(hidden_body)
+            if c.strip()
+        ]
         body_start = _body_start(md, section)
         plan.append(
             {

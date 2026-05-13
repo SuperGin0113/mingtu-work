@@ -9,7 +9,6 @@
 ├── retrieval_pipeline.py          # Milvus 向量 + BM25 融合
 ├── chunk/
 │   ├── chunk_pipelineV2.py        # 切块 + embedding 写入 Milvus
-│   ├── chunk_pipeline.py          # pgsql 版切块 pipeline
 │   └── html2md_pipeline.py        # HTML → Markdown
 ├── milvus_db.py                   # Milvus 集合初始化
 └── script/                        # 抓取、下载、导出脚本（含 pgsql db.py）

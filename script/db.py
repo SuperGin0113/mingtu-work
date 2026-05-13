@@ -5,7 +5,7 @@ import os
 import pymongo
 
 # ──────────────────────────────────────────────────────────────
-# 旧 PostgreSQL（spider / chunk_pipeline.py / export_md.py 还在用）
+# 旧 PostgreSQL（spider / export_md.py 还在用）
 # 依赖 psycopg2，仅在调用方真正连库时才会触发 import
 # ──────────────────────────────────────────────────────────────
 DB_CONFIG = {

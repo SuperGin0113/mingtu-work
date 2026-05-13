@@ -16,3 +16,11 @@ data/
 tmp/
 .venv/
 evaluation/reports
+
+# 系统文件
+.DS_Store
+**/.DS_Store
+
+# IDE / 编辑器
+.vscode/settings.json
+.idea/
