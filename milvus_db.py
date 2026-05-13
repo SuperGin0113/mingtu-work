@@ -41,22 +41,23 @@ ALIAS = "default"
 EXPECTED_FIELDS = {
     "id",
     "doc_guid",
-    "chunk_order",
     "heading",
     "content",
     "token_count",
+    "chunk_order",
     "char_start",
     "char_end",
-    "embed_model",
     "title",
     "court_line",
     "title_description",
     "create_time",
     "update_time",
+    "patent_type",
+    "metadata",
+    "embed_model",
     "embedding",
     "sparse",
 }
-REMOVED_FIELDS = {"doc_id", "parent_id", "level"}
 
 CONTENT_ANALYZER = {
     "tokenizer": "standard",
@@ -69,6 +70,16 @@ CONTENT_ANALYZER = {
 
 
 def milvus_uri() -> str:
+    if not MILVUS_HOST or not MILVUS_PORT:
+        missing = ", ".join(
+            v
+            for v, val in [
+                ("TEST_MILVUS_HOST", MILVUS_HOST),
+                ("TEST_MILVUS_PORT", MILVUS_PORT),
+            ]
+            if not val
+        )
+        raise RuntimeError(f"Milvus connection not configured: set {missing} environment variables")
     return f"http://{MILVUS_HOST}:{MILVUS_PORT}"
 
 
@@ -110,19 +121,27 @@ def build_schema() -> CollectionSchema:
         FieldSchema("token_count", DataType.INT32),
         FieldSchema("char_start", DataType.INT64),
         FieldSchema("char_end", DataType.INT64),
-        FieldSchema("embed_model", DataType.VARCHAR, max_length=64),
         FieldSchema("title", DataType.VARCHAR, max_length=1024),
         FieldSchema("court_line", DataType.VARCHAR, max_length=512),
-        FieldSchema("title_description", DataType.VARCHAR, max_length=2048),
+        FieldSchema("title_description", DataType.VARCHAR, max_length=4096),
+        FieldSchema(
+            "patent_type",
+            DataType.VARCHAR,
+            max_length=32,
+            nullable=True,
+            default_value="design",
+        ),
         FieldSchema("create_time", DataType.VARCHAR, max_length=32),
         FieldSchema("update_time", DataType.VARCHAR, max_length=32),
+        FieldSchema("metadata", DataType.JSON, nullable=True),
+        FieldSchema("embed_model", DataType.VARCHAR, max_length=64),
         FieldSchema("embedding", DataType.FLOAT_VECTOR, dim=EMBED_DIM),
         FieldSchema("sparse", DataType.SPARSE_FLOAT_VECTOR),
     ]
     schema = CollectionSchema(
         fields=fields,
         description="Westlaw chunk vectors with document metadata and character spans",
-        enable_dynamic_field=False,
+        enable_dynamic_field=True,
     )
     schema.add_function(
         Function(
@@ -138,8 +157,7 @@ def build_schema() -> CollectionSchema:
 SCALAR_INDEXES = [
     ("doc_guid", "INVERTED"),
     ("chunk_order", "INVERTED"),
-    ("char_start", "INVERTED"),
-    ("char_end", "INVERTED"),
+    ("patent_type", "INVERTED"),
     ("content", "INVERTED"),
 ]
 
@@ -147,13 +165,12 @@ SCALAR_INDEXES = [
 def _validate_schema(col: Collection) -> None:
     field_names = {field.name for field in col.schema.fields}
     missing = sorted(EXPECTED_FIELDS - field_names)
-    removed = sorted(REMOVED_FIELDS & field_names)
     id_fields = [field for field in col.schema.fields if field.name == "id"]
     id_auto = bool(id_fields and getattr(id_fields[0], "auto_id", False))
-    if missing or removed or not id_auto:
+    if missing or not id_auto:
         raise RuntimeError(
-            "Existing collection schema is not compatible with chunk_pipelineV2. "
-            f"missing={missing}, removed_fields_still_present={removed}, id_auto_id={id_auto}. "
+            "Existing collection schema is not compatible. "
+            f"missing={missing}, id_auto_id={id_auto}. "
             "Run `python milvus_db.py --init --drop` or use a new collection name."
         )
 
